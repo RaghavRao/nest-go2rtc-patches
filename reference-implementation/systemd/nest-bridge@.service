@@ -1,0 +1,22 @@
+[Unit]
+Description=Nest WebRTC->RTP bridge for %i (patched GStreamer webrtcbin)
+After=network-online.target nest-mediamtx.service
+Wants=network-online.target nest-mediamtx.service
+
+[Service]
+Type=simple
+# %i = camera key (garage|doorbell|patio|indoor). Bridge upper-cases it to pick
+# FRIGATE_NEST_CAMERA_ID_<CAM> from /opt/frigate/.env (read by the script itself).
+Environment=NEST_CAMERA=%i
+Environment=NEST_TMP=/opt/frigate/nest-bridge/run/%i
+Environment=GST_PLUGIN_PATH=/opt/frigate/nest-bridge/gst/plugins
+Environment=LD_LIBRARY_PATH=/opt/frigate/nest-bridge/gst/libs
+Environment=GST_REGISTRY=/opt/frigate/nest-bridge/run/%i/registry.bin
+EnvironmentFile=/opt/frigate/nest-bridge/env/%i.conf
+ExecStartPre=/usr/bin/mkdir -p /opt/frigate/nest-bridge/run/%i
+ExecStart=/usr/bin/python3 -u /opt/frigate/nest-bridge/nest_gst_bridge.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

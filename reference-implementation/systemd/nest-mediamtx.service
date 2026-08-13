@@ -1,0 +1,14 @@
+[Unit]
+Description=mediamtx RTSP server for Nest bridge (:18554, unauthenticated — see mediamtx.yml)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/frigate/nest-bridge
+ExecStart=/opt/frigate/nest-bridge/bin/mediamtx /opt/frigate/nest-bridge/mediamtx.yml
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

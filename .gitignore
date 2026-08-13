@@ -1,0 +1,8 @@
+# Never commit secrets/config — no negations (a re-include past *.env is a footgun)
+.env
+*.env
+*.conf
+*.token
+*secret*
+*credential*
+__pycache__/

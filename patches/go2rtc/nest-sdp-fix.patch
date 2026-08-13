@@ -1,0 +1,132 @@
+Instrumented prototype for go2rtc's Nest SDP handling (Blocker 2): adds dbg() tracing and a
+fixNestSDP() repair (candidate component-id + payload/attr dedup — a SUBSET of the six
+repairs; pion did not need the mid-remap that GStreamer's webrtcbin does). Applies against
+AlexxIT/go2rtc's pkg/nest/client.go (index 6a57091); re-base onto the current tree before use.
+
+diff --git a/pkg/nest/client.go b/pkg/nest/client.go
+index 6a57091..3980bda 100644
+--- a/pkg/nest/client.go
++++ b/pkg/nest/client.go
+@@ -2,7 +2,9 @@ package nest
+ 
+ import (
+ 	"errors"
++	"fmt"
+ 	"net/url"
++	"os"
+ 	"strings"
+ 	"time"
+ 
+@@ -12,6 +14,18 @@ import (
+ 	pion "github.com/pion/webrtc/v4"
+ )
+ 
++func dbg(format string, a ...any) { fmt.Fprintf(os.Stderr, "NEST-DBG "+format+"\n", a...) }
++
++func candLines(sdp string) string {
++	var c []string
++	for _, l := range strings.Split(sdp, "\n") {
++		if strings.HasPrefix(l, "a=candidate:") {
++			c = append(c, strings.TrimSpace(l))
++		}
++	}
++	return strings.Join(c, " | ")
++}
++
+ type WebRTCClient struct {
+ 	conn *webrtc.Conn
+ 	api  *API
+@@ -119,6 +133,9 @@ func rtcConn(nestAPI *API, rawURL, projectID, deviceID string) (*WebRTCClient, e
+ 		conn.Protocol = "http"
+ 		conn.URL = rawURL
+ 
++		pc.OnICEConnectionStateChange(func(s pion.ICEConnectionState) { dbg("iceState=%s", s) })
++		pc.OnConnectionStateChange(func(s pion.PeerConnectionState) { dbg("connState=%s", s) })
++
+ 		// https://developers.google.com/nest/device-access/traits/device/camera-live-stream#generatewebrtcstream-request-fields
+ 		medias := []*core.Media{
+ 			{Kind: core.KindAudio, Direction: core.DirectionRecvonly},
+@@ -134,6 +151,7 @@ func rtcConn(nestAPI *API, rawURL, projectID, deviceID string) (*WebRTCClient, e
+ 
+ 		// 4. Exchange SDP via Hass
+ 		answer, err := nestAPI.ExchangeSDP(projectID, deviceID, offer)
++		dbg("ExchangeSDP err=%v answerLen=%d", err, len(answer))
+ 		if err != nil {
+ 			lastErr = err
+ 			if attempt < maxRetries-1 {
+@@ -143,11 +161,20 @@ func rtcConn(nestAPI *API, rawURL, projectID, deviceID string) (*WebRTCClient, e
+ 			}
+ 			return nil, err
+ 		}
++		dbg("answer candidates RAW: %s", candLines(answer))
++
++		// 4b. Repair Google's non-conformant answer SDP (malformed ICE candidate
++		// lines: leading space + missing component-id; duplicated video payloads).
++		// pion silently fails to use these -> ICE never connects -> recv=0.
++		answer = fixNestSDP(answer)
++		dbg("answer candidates FIXED: %s", candLines(answer))
+ 
+ 		// 5. Set answer with remote medias
+ 		if err = conn.SetAnswer(answer); err != nil {
++			dbg("SetAnswer err=%v", err)
+ 			return nil, err
+ 		}
++		dbg("SetAnswer OK")
+ 
+ 		return &WebRTCClient{conn: conn, api: nestAPI}, nil
+ 	}
+@@ -155,6 +182,54 @@ func rtcConn(nestAPI *API, rawURL, projectID, deviceID string) (*WebRTCClient, e
+ 	return nil, lastErr
+ }
+ 
++// fixNestSDP rewrites Google Nest's non-conformant answer SDP into standard form:
++//   - ICE candidates: "a=candidate: <foundation> <transport> ..." (stray leading
++//     space + missing component-id) -> "a=candidate:<foundation> 1 <transport> ...",
++//     and drops the non-standard trailing "generation N".
++//   - media m-line: de-duplicates repeated payload types and rtpmap/fmtp/rtcp-fb.
++func fixNestSDP(s string) string {
++	lines := strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n")
++	out := make([]string, 0, len(lines))
++	seen := map[string]bool{}
++	for _, line := range lines {
++		switch {
++		case strings.HasPrefix(line, "m="):
++			seen = map[string]bool{}
++			f := strings.Fields(line)
++			if len(f) > 3 {
++				var pts []string
++				dup := map[string]bool{}
++				for _, p := range f[3:] {
++					if !dup[p] {
++						dup[p] = true
++						pts = append(pts, p)
++					}
++				}
++				line = strings.Join(append(f[:3:3], pts...), " ")
++			}
++		case strings.HasPrefix(line, "a=candidate:"):
++			toks := strings.Fields(line[len("a=candidate:"):])
++			if len(toks) >= 2 && (strings.EqualFold(toks[1], "udp") || strings.EqualFold(toks[1], "tcp")) {
++				toks = append([]string{toks[0], "1"}, toks[1:]...)
++			}
++			for i, t := range toks {
++				if t == "generation" {
++					toks = toks[:i]
++					break
++				}
++			}
++			line = "a=candidate:" + strings.Join(toks, " ")
++		case strings.HasPrefix(line, "a=rtpmap:"), strings.HasPrefix(line, "a=fmtp:"), strings.HasPrefix(line, "a=rtcp-fb:"):
++			if seen[line] {
++				continue
++			}
++			seen[line] = true
++		}
++		out = append(out, line)
++	}
++	return strings.Join(out, "\r\n") + "\r\n"
++}
++
+ func rtspConn(nestAPI *API, rawURL, projectID, deviceID string) (*RTSPClient, error) {
+ 	rtspURL, err := nestAPI.GenerateRtspStream(projectID, deviceID)
+ 	if err != nil {

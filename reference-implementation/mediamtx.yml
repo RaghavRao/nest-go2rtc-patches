@@ -1,0 +1,27 @@
+logLevel: info
+rtsp: yes
+# :18554 binds all interfaces so the Frigate CONTAINER can reach it via
+# host.containers.internal. SECURITY: these RTSP paths are UNAUTHENTICATED — on an
+# untrusted LAN, firewall :18554 to localhost + the container subnet (or add mediamtx
+# auth). If Frigate runs on the host without containers, use 127.0.0.1:18554 instead.
+rtspAddress: :18554
+rtmp: no
+hls: no
+webrtc: no
+srt: no
+api: no
+metrics: no
+# Each Nest camera: a bridge (systemd nest-bridge@<cam>) forwards H264 RTP to a UDP
+# port; mediamtx picks it up on demand via the matching SDP and republishes as RTSP.
+# Add a camera => add its bridge unit + env/<cam>.conf + sdp/<cam>.sdp + a path here.
+paths:
+  garage:
+    runOnDemand: >
+      ffmpeg -hide_banner -protocol_whitelist file,udp,rtp
+      -analyzeduration 10M -probesize 10M
+      -i /opt/frigate/nest-bridge/sdp/garage.sdp
+      -c copy -f rtsp rtsp://localhost:$RTSP_PORT/$MTX_PATH
+    runOnDemandRestart: yes
+    runOnDemandStartTimeout: 15s
+    runOnDemandCloseAfter: 20s
+  # (add doorbell/patio/… the same way, each with its own sdp/<cam>.sdp)

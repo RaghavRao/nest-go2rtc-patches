@@ -1,0 +1,21 @@
+webrtcbin: accept Google Nest's base64 ICE credential charset ('=', '-', '_')
+
+GStreamer's _validate_ice_attr (ext/webrtc/webrtcsdp.c) enforces RFC 8839 ice-char
+(ALPHA / DIGIT / '+' / '/'), but Google's SDM answer carries base64 ice-ufrag/ice-pwd
+containing '=', '-', '_', so webrtcbin rejects the answer. Do NOT strip the '=' instead:
+it is part of Google's STUN short-term-credential key and removing it breaks connectivity
+checks. Verified against gst-plugins-bad 1.28.6 (Fedora 44, 2026-08).
+Apply from the gst-plugins-bad source root:  git apply -p1 webrtcsdp-ice-pwd.patch
+---
+--- a/ext/webrtc/webrtcsdp.c
++++ b/ext/webrtc/webrtcsdp.c
+@@ -227,7 +227,8 @@
+     return FALSE;
+ 
+   for (guint i = 0; i < len; i++) {
+-    if (!g_ascii_isalnum (attr[i]) && attr[i] != '+' && attr[i] != '/')
++    if (!g_ascii_isalnum (attr[i]) && attr[i] != '+' && attr[i] != '/'
++        && attr[i] != '=' && attr[i] != '-' && attr[i] != '_')  /* PATCH: Nest base64 ice creds */
+       return FALSE;
+   }
+   return TRUE;
